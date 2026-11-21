@@ -1,0 +1,483 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public-safe user profile storing therapeutic preferences and consent state (PII isolated in private subcollection).",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the user."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Display name chosen by the user."
+        },
+        "therapeuticGoal": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "User's personal wellness or CBT focus objective."
+        },
+        "consentAccepted": {
+          "type": "boolean",
+          "description": "Whether the user accepted the informed consent and ethical AI disclosure."
+        },
+        "consentAcceptedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when informed consent was accepted."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was last updated."
+        }
+      },
+      "required": ["uid", "displayName", "consentAccepted", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated PII record for the user containing their verified email address.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the user."
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 254,
+          "description": "Verified email address of the user."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when updated."
+        }
+      },
+      "required": ["uid", "email", "createdAt", "updatedAt"]
+    },
+    "LoginSession": {
+      "title": "LoginSession",
+      "description": "Audit log of authenticated browser sessions for the user.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "deviceInfo": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "signed_out"]
+        },
+        "lastActive": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "deviceInfo", "status", "lastActive", "createdAt"]
+    },
+    "MoodEntry": {
+      "title": "MoodEntry",
+      "description": "User mood log entry with 0-100 score, emotion label, triggers, and optional reflection note.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "score": {
+          "type": "number",
+          "description": "Mood score from 0 to 100."
+        },
+        "emotionLabel": {
+          "type": "string",
+          "enum": ["Calm", "Hopeful", "Balanced", "Tired", "Anxious", "Sad", "Overwhelmed", "Stressed", "Irritable"]
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "triggers": {
+          "type": "array",
+          "description": "Bounded array of up to 5 brief trigger tags."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "score", "emotionLabel", "note", "triggers", "timestamp", "createdAt", "updatedAt"]
+    },
+    "ActivityEntry": {
+      "title": "ActivityEntry",
+      "description": "Behavioral activation, mindfulness, or CBT relaxation activity logged by the user.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["meditation", "exercise", "thought_record", "behavioral_activation", "relaxation", "journaling", "problem_solving"]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "duration": {
+          "type": "number",
+          "description": "Duration in minutes (0-480)."
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "type", "name", "description", "duration", "completed", "timestamp", "createdAt", "updatedAt"]
+    },
+    "ThoughtRecord": {
+      "title": "ThoughtRecord",
+      "description": "Structured CBT cognitive restructuring worksheet.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "situation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "automaticThought": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "distortion": {
+          "type": "string",
+          "enum": [
+            "All-or-Nothing Thinking",
+            "Overgeneralization",
+            "Catastrophizing",
+            "Personalization",
+            "Emotional Reasoning",
+            "Mental Filtering",
+            "Mind Reading",
+            "Should Statements",
+            "None Identified"
+          ]
+        },
+        "emotionIntensityBefore": {
+          "type": "number"
+        },
+        "evidenceFor": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "evidenceAgainst": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "balancedThought": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "emotionIntensityAfter": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userId",
+        "situation",
+        "automaticThought",
+        "distortion",
+        "emotionIntensityBefore",
+        "evidenceFor",
+        "evidenceAgainst",
+        "balancedThought",
+        "emotionIntensityAfter",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ChatSession": {
+      "title": "ChatSession",
+      "description": "CBT therapeutic dialogue session metadata.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "completed", "archived"]
+        },
+        "primaryTechnique": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "currentGoal": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "messageCount": {
+          "type": "number"
+        },
+        "lastSentiment": {
+          "type": "string",
+          "enum": ["positive", "neutral", "negative", "distressed", "crisis"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "title", "status", "primaryTechnique", "currentGoal", "messageCount", "lastSentiment", "createdAt", "updatedAt"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Individual message within a CBT chat session subcollection.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "sessionId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "assistant"]
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 6000
+        },
+        "sentiment": {
+          "type": "string",
+          "enum": ["positive", "neutral", "negative", "distressed", "crisis"]
+        },
+        "emotion": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "cbtTechnique": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "cbtGoal": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "detectedDistortion": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "crisisDetected": {
+          "type": "boolean"
+        },
+        "responseTimeMs": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "sessionId", "role", "content", "sentiment", "emotion", "cbtTechnique", "cbtGoal", "detectedDistortion", "crisisDetected", "responseTimeMs", "createdAt"]
+    },
+    "SentimentAnalysis": {
+      "title": "SentimentAnalysis",
+      "description": "Structured NLP sentiment, valence, emotion, and cognitive distortion analysis saved by the user.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "inputText": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "sentiment": {
+          "type": "string",
+          "enum": ["positive", "neutral", "negative", "distressed", "crisis"]
+        },
+        "valenceScore": {
+          "type": "number",
+          "description": "Valence score from 0 (distressed) to 100 (positive)."
+        },
+        "confidence": {
+          "type": "number",
+          "description": "Model confidence percentage from 0 to 100."
+        },
+        "primaryEmotion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "detectedDistortion": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "keyPhrases": {
+          "type": "array",
+          "description": "Up to 5 extracted emotional or cognitive phrases."
+        },
+        "cbtInsight": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "suggestedAction": {
+          "type": "string",
+          "enum": ["thought_record", "breathing", "activity", "chat", "none"]
+        },
+        "crisisDetected": {
+          "type": "boolean"
+        },
+        "responseTimeMs": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userId",
+        "inputText",
+        "sentiment",
+        "valenceScore",
+        "confidence",
+        "primaryEmotion",
+        "detectedDistortion",
+        "keyPhrases",
+        "cbtInsight",
+        "suggestedAction",
+        "crisisDetected",
+        "responseTimeMs",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile preferences and informed consent record."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Isolated PII subcollection storing user email."
+    },
+    "/userSessions/{sessionDocId}": {
+      "schema": { "$ref": "#/entities/LoginSession" },
+      "description": "User login session audit logs."
+    },
+    "/moods/{moodId}": {
+      "schema": { "$ref": "#/entities/MoodEntry" },
+      "description": "User mood logs (0-100 score, emotion, triggers, notes)."
+    },
+    "/activities/{activityId}": {
+      "schema": { "$ref": "#/entities/ActivityEntry" },
+      "description": "User behavioral activation and relaxation activities."
+    },
+    "/thoughtRecords/{recordId}": {
+      "schema": { "$ref": "#/entities/ThoughtRecord" },
+      "description": "User CBT thought restructuring worksheets."
+    },
+    "/chatSessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/ChatSession" },
+      "description": "User CBT chat sessions."
+    },
+    "/chatSessions/{sessionId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Messages belonging to a CBT chat session."
+    },
+    "/sentimentAnalyses/{analysisId}": {
+      "schema": { "$ref": "#/entities/SentimentAnalysis" },
+      "description": "Saved sentiment and cognitive distortion analyses for the user."
+    }
+  }
+}

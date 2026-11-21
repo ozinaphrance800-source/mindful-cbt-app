@@ -1,0 +1,8 @@
+{
+  "name": "Mindful",
+  "description": "AI-powered Cognitive Behavioral Therapy (CBT) companion with mood tracking, structured thought records, and secure cloud storage.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

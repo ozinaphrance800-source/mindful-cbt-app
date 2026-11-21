@@ -1,0 +1,550 @@
+import { GoogleGenAI, Type } from '@google/genai';
+
+export const config = {
+  path: '/api/*',
+};
+
+const FAST_MODEL = 'gemini-3.1-flash-lite';
+
+const CRISIS_PATTERNS = [
+  /\b(kill myself|end my life|suicide|suicidal|want to die|better off dead|hurt myself|self[- ]?harm|cut myself|overdose)\b/i,
+];
+
+function detectCrisisKeywords(text: string): boolean {
+  return CRISIS_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+const CHAT_REPLY_SYSTEM_INSTRUCTION = `You are Mindful, an empathetic, evidence-based Cognitive Behavioral Therapy (CBT) digital companion for adults managing stress, anxiety, and low mood.
+
+Guidelines:
+1. Validate the user's feeling warmly in 1-2 sentences without judgment.
+2. Connect thoughts, feelings, and behaviors gently (Beck's CBT model).
+3. Ask one focused, reflective Socratic question or offer one brief practical CBT skill (Thought Record, 4-7-8 breathing, or behavioral activation).
+4. Keep replies concise, warm, and conversational (2 short paragraphs max). Never diagnose or claim to be a licensed clinician.
+5. Do NOT output JSON or markdown headers—write directly to the user.
+6. If the user expresses suicidal ideation, self-harm intent, or acute danger, calmly state that you are an AI companion unable to handle emergencies and urge immediate contact with 988 (US/Canada), text HOME to 741741, local emergency services, or findahelpline.com.`;
+
+const CHAT_METADATA_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    sentiment: {
+      type: Type.STRING,
+      description: 'Must be exactly one of: positive, neutral, negative, distressed, crisis',
+    },
+    emotion: {
+      type: Type.STRING,
+      description:
+        'Primary emotion in 1-2 words (e.g., Anxious, Sad, Hopeful, Overwhelmed, Calm, Frustrated).',
+    },
+    cbtTechnique: {
+      type: Type.STRING,
+      description:
+        'Primary CBT technique fit (e.g., Socratic Questioning, Cognitive Restructuring, Behavioral Activation, Grounding & Relaxation, Thought Record, Problem-Solving).',
+    },
+    detectedDistortion: {
+      type: Type.STRING,
+      description:
+        'Detected cognitive distortion (All-or-Nothing Thinking, Overgeneralization, Catastrophizing, Personalization, Emotional Reasoning, Mental Filtering, Mind Reading, Should Statements) or "None Identified".',
+    },
+    cbtGoal: {
+      type: Type.STRING,
+      description: 'Short 1-sentence therapeutic focus under 120 chars.',
+    },
+    suggestedAction: {
+      type: Type.STRING,
+      description: 'Must be one of: thought_record, breathing, activity, none.',
+    },
+    crisisDetected: {
+      type: Type.BOOLEAN,
+      description: 'True if user expresses self-harm, suicide, or acute danger.',
+    },
+  },
+  required: [
+    'sentiment',
+    'emotion',
+    'cbtTechnique',
+    'detectedDistortion',
+    'cbtGoal',
+    'suggestedAction',
+    'crisisDetected',
+  ],
+};
+
+const FULL_CHAT_JSON_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    reply: {
+      type: Type.STRING,
+      description: 'Concise, empathetic CBT therapeutic reply (2 short paragraphs max).',
+    },
+    ...CHAT_METADATA_SCHEMA.properties,
+  },
+  required: ['reply', ...CHAT_METADATA_SCHEMA.required],
+};
+
+const SENTIMENT_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    sentiment: {
+      type: Type.STRING,
+      description: 'Must be exactly one of: positive, neutral, negative, distressed, crisis',
+    },
+    valenceScore: {
+      type: Type.NUMBER,
+      description: 'Integer 0 to 100 where 0 is deeply distressed, 50 is neutral, 100 is strongly positive.',
+    },
+    confidence: {
+      type: Type.NUMBER,
+      description: 'Confidence percentage 0 to 100.',
+    },
+    primaryEmotion: {
+      type: Type.STRING,
+      description:
+        'Single primary emotion label (e.g., Calm, Hopeful, Anxious, Stressed, Sad, Overwhelmed, Balanced, Frustrated).',
+    },
+    emotionBreakdown: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          label: { type: Type.STRING },
+          score: { type: Type.NUMBER, description: 'Intensity 0 to 100' },
+        },
+        required: ['label', 'score'],
+      },
+      description: 'Exactly 5 dimensions: Calm/Hope, Stress, Anxiety, Sadness, Frustration.',
+    },
+    detectedDistortion: {
+      type: Type.STRING,
+      description:
+        'Detected cognitive distortion (All-or-Nothing Thinking, Overgeneralization, Catastrophizing, Personalization, Emotional Reasoning, Mental Filtering, Mind Reading, Should Statements) or "None Identified".',
+    },
+    keyPhrases: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: 'Up to 4 short verbatim phrases from the text reflecting emotional state or triggers.',
+    },
+    cbtInsight: {
+      type: Type.STRING,
+      description: 'Brief 1-2 sentence supportive CBT reflection or cognitive reframe under 420 chars.',
+    },
+    suggestedAction: {
+      type: Type.STRING,
+      description: 'Must be one of: thought_record, breathing, activity, chat, none.',
+    },
+    crisisDetected: {
+      type: Type.BOOLEAN,
+      description: 'True if text indicates suicidal ideation, self-harm, or acute crisis.',
+    },
+  },
+  required: [
+    'sentiment',
+    'valenceScore',
+    'confidence',
+    'primaryEmotion',
+    'emotionBreakdown',
+    'detectedDistortion',
+    'keyPhrases',
+    'cbtInsight',
+    'suggestedAction',
+    'crisisDetected',
+  ],
+};
+
+interface HistoryTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+interface ChatRequestBody {
+  message?: unknown;
+  history?: unknown;
+  recentMoodSummary?: unknown;
+  therapeuticGoal?: unknown;
+}
+
+function getGenAIClient(): GoogleGenAI {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY is not configured on Netlify Environment Variables.');
+  }
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+}
+
+function sanitizeHistory(raw: unknown): HistoryTurn[] {
+  const rawHistory = Array.isArray(raw) ? raw : [];
+  return rawHistory
+    .slice(-10)
+    .filter(
+      (item): item is HistoryTurn =>
+        Boolean(item) &&
+        typeof item === 'object' &&
+        (item.role === 'user' || item.role === 'assistant') &&
+        typeof item.content === 'string' &&
+        item.content.trim().length > 0
+    )
+    .map((item) => ({
+      role: item.role,
+      content: item.content.slice(0, 2000),
+    }));
+}
+
+function buildChatContext(body: ChatRequestBody, rawMessage: string): string {
+  const history = sanitizeHistory(body.history);
+  const recentMoodSummary =
+    typeof body.recentMoodSummary === 'string' ? body.recentMoodSummary.slice(0, 240) : '';
+  const therapeuticGoal =
+    typeof body.therapeuticGoal === 'string' ? body.therapeuticGoal.slice(0, 240) : '';
+
+  const contextLines: string[] = [];
+  if (therapeuticGoal) contextLines.push(`Goal: ${therapeuticGoal}`);
+  if (recentMoodSummary) contextLines.push(`Recent moods: ${recentMoodSummary}`);
+  if (history.length > 0) {
+    const transcript = history
+      .map((turn) => `${turn.role === 'user' ? 'User' : 'Mindful'}: ${turn.content}`)
+      .join('\n');
+    contextLines.push(`Conversation:\n${transcript}`);
+  }
+  contextLines.push(`User: ${rawMessage}`);
+  return contextLines.join('\n\n');
+}
+
+function normalizeChatMetadata(
+  parsed: Partial<{
+    sentiment: string;
+    emotion: string;
+    cbtTechnique: string;
+    detectedDistortion: string;
+    cbtGoal: string;
+    suggestedAction: string;
+    crisisDetected: boolean;
+  }>,
+  keywordCrisis: boolean
+) {
+  const validSentiments = ['positive', 'neutral', 'negative', 'distressed', 'crisis'];
+  const isCrisis = Boolean(parsed.crisisDetected) || keywordCrisis;
+  const sentiment = isCrisis
+    ? 'crisis'
+    : validSentiments.includes(parsed.sentiment ?? '')
+      ? (parsed.sentiment as string)
+      : 'neutral';
+
+  const validActions = ['thought_record', 'breathing', 'activity', 'none'];
+  const suggestedAction = validActions.includes(parsed.suggestedAction ?? '')
+    ? (parsed.suggestedAction as string)
+    : 'none';
+
+  return {
+    sentiment,
+    emotion: (parsed.emotion || 'Reflective').slice(0, 40),
+    cbtTechnique: (parsed.cbtTechnique || 'Socratic Questioning').slice(0, 80),
+    detectedDistortion: (parsed.detectedDistortion || 'None Identified').slice(0, 80),
+    cbtGoal: (parsed.cbtGoal || 'Explore thoughts and emotional triggers safely').slice(0, 200),
+    suggestedAction,
+    crisisDetected: isCrisis,
+  };
+}
+
+function jsonResponse(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+export default async function handler(req: Request): Promise<Response> {
+  const pathname = new URL(req.url).pathname;
+
+  if (req.method === 'GET' && pathname === '/api/health') {
+    return jsonResponse({ ok: true, service: 'mindful-cbt-api' });
+  }
+
+  if (req.method !== 'POST') {
+    return jsonResponse({ error: 'Method not allowed.' }, 405);
+  }
+
+  if (pathname === '/api/cbt/chat/stream') {
+    const startedAt = Date.now();
+    const body = (await req.json().catch(() => ({}))) as ChatRequestBody;
+    const rawMessage = typeof body.message === 'string' ? body.message.trim() : '';
+
+    if (!rawMessage) {
+      return jsonResponse({ error: 'Message cannot be empty.' }, 400);
+    }
+    if (rawMessage.length > 6000) {
+      return jsonResponse({ error: 'Message exceeds maximum length of 6000 characters.' }, 400);
+    }
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const sendEvent = (event: string, payload: unknown) => {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`));
+        };
+
+        try {
+          const ai = getGenAIClient();
+          const keywordCrisis = detectCrisisKeywords(rawMessage);
+          const contextText = buildChatContext(body, rawMessage);
+
+          const metadataPromise = ai.models
+            .generateContent({
+              model: FAST_MODEL,
+              contents: `Analyze this user message for CBT sentiment, emotion, cognitive distortion, and crisis indicators:\n"${rawMessage}"`,
+              config: {
+                systemInstruction:
+                  'Classify CBT emotional state and cognitive distortion accurately and concisely.',
+                responseMimeType: 'application/json',
+                responseSchema: CHAT_METADATA_SCHEMA,
+              },
+            })
+            .then((metaRes) => {
+              const txt = (metaRes.text ?? '{}').trim();
+              const parsed = JSON.parse(txt);
+              const meta = normalizeChatMetadata(parsed, keywordCrisis);
+              sendEvent('metadata', meta);
+              return meta;
+            });
+
+          const replyPromise = (async () => {
+            const genStream = await ai.models.generateContentStream({
+              model: FAST_MODEL,
+              contents: contextText,
+              config: {
+                systemInstruction: CHAT_REPLY_SYSTEM_INSTRUCTION,
+              },
+            });
+
+            let fullReply = '';
+            for await (const chunk of genStream) {
+              const piece = chunk.text ?? '';
+              if (piece) {
+                fullReply += piece;
+                sendEvent('delta', { text: piece });
+              }
+            }
+            return fullReply.trim();
+          })();
+
+          const [metadata, streamedReply] = await Promise.all([metadataPromise, replyPromise]);
+          let finalReply = streamedReply;
+
+          if (!finalReply) {
+            sendEvent('error', { error: 'The CBT language model returned an empty response.' });
+            controller.close();
+            return;
+          }
+
+          if (keywordCrisis && !/988|helpline|emergency/i.test(finalReply)) {
+            const crisisSuffix =
+              '\n\nBecause you mentioned thoughts of hurting yourself, please know immediate human support is available right now: call or text 988 (US & Canada), text HOME to 741741, call local emergency services, or visit findahelpline.com.';
+            finalReply += crisisSuffix;
+            sendEvent('delta', { text: crisisSuffix });
+          }
+
+          sendEvent('done', {
+            reply: finalReply.slice(0, 6000),
+            ...metadata,
+            responseTimeMs: Math.max(1, Date.now() - startedAt),
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unexpected server error.';
+          sendEvent('error', { error: message });
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+      },
+    });
+  }
+
+  if (pathname === '/api/cbt/chat') {
+    const startedAt = Date.now();
+    try {
+      const body = (await req.json().catch(() => ({}))) as ChatRequestBody;
+      const rawMessage = typeof body.message === 'string' ? body.message.trim() : '';
+
+      if (!rawMessage) {
+        return jsonResponse({ error: 'Message cannot be empty.' }, 400);
+      }
+      if (rawMessage.length > 6000) {
+        return jsonResponse({ error: 'Message exceeds maximum length of 6000 characters.' }, 400);
+      }
+
+      const keywordCrisis = detectCrisisKeywords(rawMessage);
+      const ai = getGenAIClient();
+
+      const response = await ai.models.generateContent({
+        model: FAST_MODEL,
+        contents: buildChatContext(body, rawMessage),
+        config: {
+          systemInstruction: CHAT_REPLY_SYSTEM_INSTRUCTION,
+          responseMimeType: 'application/json',
+          responseSchema: FULL_CHAT_JSON_SCHEMA,
+        },
+      });
+
+      const rawText = (response.text ?? '').trim();
+      if (!rawText) {
+        return jsonResponse({ error: 'The CBT language model returned an empty response.' }, 502);
+      }
+
+      const parsed = JSON.parse(rawText) as {
+        reply?: string;
+        sentiment?: string;
+        emotion?: string;
+        cbtTechnique?: string;
+        detectedDistortion?: string;
+        cbtGoal?: string;
+        suggestedAction?: string;
+        crisisDetected?: boolean;
+      };
+
+      const metadata = normalizeChatMetadata(parsed, keywordCrisis);
+      let replyText = (parsed.reply ?? '').trim();
+      if (!replyText) {
+        return jsonResponse({ error: 'Unable to parse therapeutic reply from model output.' }, 502);
+      }
+
+      if (keywordCrisis && !/988|helpline|emergency/i.test(replyText)) {
+        replyText +=
+          '\n\nBecause you mentioned thoughts of hurting yourself, please know immediate human support is available right now: call or text 988 (US & Canada), text HOME to 741741, call local emergency services, or visit findahelpline.com.';
+      }
+
+      return jsonResponse({
+        reply: replyText.slice(0, 6000),
+        ...metadata,
+        responseTimeMs: Math.max(1, Date.now() - startedAt),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unexpected server error.';
+      const status =
+        message.includes('API_KEY') || message.includes('PERMISSION_DENIED') ? 403 : 500;
+      return jsonResponse({ error: message }, status);
+    }
+  }
+
+  if (pathname === '/api/cbt/sentiment') {
+    const startedAt = Date.now();
+    try {
+      const body = (await req.json().catch(() => ({}))) as { text?: unknown };
+      const rawText = typeof body.text === 'string' ? body.text.trim() : '';
+
+      if (!rawText) {
+        return jsonResponse({ error: 'Please enter text to analyze.' }, 400);
+      }
+      if (rawText.length > 2000) {
+        return jsonResponse({ error: 'Text exceeds maximum length of 2000 characters.' }, 400);
+      }
+
+      const keywordCrisis = detectCrisisKeywords(rawText);
+      const ai = getGenAIClient();
+
+      const response = await ai.models.generateContent({
+        model: FAST_MODEL,
+        contents: `Perform clinical-grade CBT sentiment and cognitive analysis on the following user text:\n\n"${rawText}"`,
+        config: {
+          systemInstruction:
+            'You are a fast, precise CBT sentiment analyzer. Return accurate valence score (0-100), confidence (0-100), primary emotion, 5 emotion spectrum scores (Calm/Hope, Stress, Anxiety, Sadness, Frustration), any cognitive distortion, up to 4 short verbatim key phrases from the text, and a brief supportive CBT insight.',
+          responseMimeType: 'application/json',
+          responseSchema: SENTIMENT_SCHEMA,
+        },
+      });
+
+      const modelText = (response.text ?? '').trim();
+      if (!modelText) {
+        return jsonResponse({ error: 'Sentiment analyzer returned an empty response.' }, 502);
+      }
+
+      const parsed = JSON.parse(modelText) as {
+        sentiment?: string;
+        valenceScore?: number;
+        confidence?: number;
+        primaryEmotion?: string;
+        emotionBreakdown?: { label?: string; score?: number }[];
+        detectedDistortion?: string;
+        keyPhrases?: string[];
+        cbtInsight?: string;
+        suggestedAction?: string;
+        crisisDetected?: boolean;
+      };
+
+      const validSentiments = ['positive', 'neutral', 'negative', 'distressed', 'crisis'];
+      const isCrisis = Boolean(parsed.crisisDetected) || keywordCrisis;
+      const sentiment = isCrisis
+        ? 'crisis'
+        : validSentiments.includes(parsed.sentiment ?? '')
+          ? (parsed.sentiment as string)
+          : 'neutral';
+
+      const validActions = ['thought_record', 'breathing', 'activity', 'chat', 'none'];
+      const suggestedAction = isCrisis
+        ? 'chat'
+        : validActions.includes(parsed.suggestedAction ?? '')
+          ? (parsed.suggestedAction as string)
+          : 'none';
+
+      const clamp = (n: unknown, fallback: number) =>
+        typeof n === 'number' && Number.isFinite(n)
+          ? Math.min(100, Math.max(0, Math.round(n)))
+          : fallback;
+
+      const breakdown = Array.isArray(parsed.emotionBreakdown)
+        ? parsed.emotionBreakdown
+            .slice(0, 5)
+            .filter((item) => item && typeof item.label === 'string')
+            .map((item) => ({
+              label: String(item.label).slice(0, 30),
+              score: clamp(item.score, 0),
+            }))
+        : [];
+
+      const keyPhrases = Array.isArray(parsed.keyPhrases)
+        ? parsed.keyPhrases
+            .map((p) => String(p).trim().slice(0, 60))
+            .filter((p) => p.length > 0)
+            .slice(0, 5)
+        : [];
+
+      return jsonResponse({
+        sentiment,
+        valenceScore: isCrisis
+          ? Math.min(clamp(parsed.valenceScore, 15), 25)
+          : clamp(parsed.valenceScore, 50),
+        confidence: clamp(parsed.confidence, 85),
+        primaryEmotion: (parsed.primaryEmotion || (isCrisis ? 'Distressed' : 'Balanced')).slice(0, 40),
+        emotionBreakdown: breakdown,
+        detectedDistortion: (parsed.detectedDistortion || 'None Identified').slice(0, 80),
+        keyPhrases,
+        cbtInsight: (
+          parsed.cbtInsight ||
+          'Notice the thoughts behind this feeling and approach them with balanced curiosity.'
+        ).slice(0, 500),
+        suggestedAction,
+        crisisDetected: isCrisis,
+        responseTimeMs: Math.max(1, Date.now() - startedAt),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unexpected server error.';
+      const status =
+        message.includes('API_KEY') || message.includes('PERMISSION_DENIED') ? 403 : 500;
+      return jsonResponse({ error: message }, status);
+    }
+  }
+
+  return jsonResponse({ error: 'Not found.' }, 404);
+}

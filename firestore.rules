@@ -1,0 +1,406 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default-deny all unmatched paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitive Helpers ---
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerified() && request.auth.uid == userId;
+    }
+
+    // --- Validation Blueprints ---
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'therapeuticGoal', 'consentAccepted', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'therapeuticGoal', 'consentAccepted', 'consentAcceptedAt', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == request.auth.uid
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.therapeuticGoal is string && data.therapeuticGoal.size() <= 300
+        && data.consentAccepted is bool
+        && (!('consentAcceptedAt' in data) || data.consentAcceptedAt is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivateInfo(data) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == request.auth.uid
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLoginSession(data) {
+      return data.keys().hasAll(['userId', 'deviceInfo', 'status', 'lastActive', 'createdAt'])
+        && data.keys().hasOnly(['userId', 'deviceInfo', 'status', 'lastActive', 'createdAt'])
+        && isValidId(data.userId)
+        && data.userId == request.auth.uid
+        && data.deviceInfo is string && data.deviceInfo.size() >= 1 && data.deviceInfo.size() <= 200
+        && data.status in ['active', 'signed_out']
+        && data.lastActive is timestamp
+        && data.createdAt is timestamp;
+    }
+
+    function isValidMoodEntry(data) {
+      return data.keys().hasAll(['userId', 'score', 'emotionLabel', 'note', 'triggers', 'timestamp', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'score', 'emotionLabel', 'note', 'triggers', 'timestamp', 'createdAt', 'updatedAt'])
+        && isValidId(data.userId)
+        && data.userId == request.auth.uid
+        && data.score is number && data.score >= 0 && data.score <= 100
+        && data.emotionLabel in ['Calm', 'Hopeful', 'Balanced', 'Tired', 'Anxious', 'Sad', 'Overwhelmed', 'Stressed', 'Irritable']
+        && data.note is string && data.note.size() <= 1000
+        && data.triggers is list && data.triggers.size() <= 5
+        && (data.triggers.size() == 0 || (data.triggers[0] is string && data.triggers[0].size() >= 1 && data.triggers[0].size() <= 40))
+        && data.timestamp is timestamp
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidActivityEntry(data) {
+      return data.keys().hasAll(['userId', 'type', 'name', 'description', 'duration', 'completed', 'timestamp', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'type', 'name', 'description', 'duration', 'completed', 'timestamp', 'createdAt', 'updatedAt'])
+        && isValidId(data.userId)
+        && data.userId == request.auth.uid
+        && data.type in ['meditation', 'exercise', 'thought_record', 'behavioral_activation', 'relaxation', 'journaling', 'problem_solving']
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.description is string && data.description.size() <= 1000
+        && data.duration is number && data.duration >= 0 && data.duration <= 480
+        && data.completed is bool
+        && data.timestamp is timestamp
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidThoughtRecord(data) {
+      return data.keys().hasAll(['userId', 'situation', 'automaticThought', 'distortion', 'emotionIntensityBefore', 'evidenceFor', 'evidenceAgainst', 'balancedThought', 'emotionIntensityAfter', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'situation', 'automaticThought', 'distortion', 'emotionIntensityBefore', 'evidenceFor', 'evidenceAgainst', 'balancedThought', 'emotionIntensityAfter', 'createdAt', 'updatedAt'])
+        && isValidId(data.userId)
+        && data.userId == request.auth.uid
+        && data.situation is string && data.situation.size() >= 1 && data.situation.size() <= 500
+        && data.automaticThought is string && data.automaticThought.size() >= 1 && data.automaticThought.size() <= 500
+        && data.distortion in [
+          'All-or-Nothing Thinking',
+          'Overgeneralization',
+          'Catastrophizing',
+          'Personalization',
+          'Emotional Reasoning',
+          'Mental Filtering',
+          'Mind Reading',
+          'Should Statements',
+          'None Identified'
+        ]
+        && data.emotionIntensityBefore is number && data.emotionIntensityBefore >= 0 && data.emotionIntensityBefore <= 100
+        && data.evidenceFor is string && data.evidenceFor.size() <= 500
+        && data.evidenceAgainst is string && data.evidenceAgainst.size() <= 500
+        && data.balancedThought is string && data.balancedThought.size() >= 1 && data.balancedThought.size() <= 500
+        && data.emotionIntensityAfter is number && data.emotionIntensityAfter >= 0 && data.emotionIntensityAfter <= 100
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChatSession(data) {
+      return data.keys().hasAll(['userId', 'title', 'status', 'primaryTechnique', 'currentGoal', 'messageCount', 'lastSentiment', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'title', 'status', 'primaryTechnique', 'currentGoal', 'messageCount', 'lastSentiment', 'createdAt', 'updatedAt'])
+        && isValidId(data.userId)
+        && data.userId == request.auth.uid
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+        && data.status in ['active', 'completed', 'archived']
+        && data.primaryTechnique is string && data.primaryTechnique.size() <= 80
+        && data.currentGoal is string && data.currentGoal.size() <= 200
+        && data.messageCount is number && data.messageCount >= 0 && data.messageCount <= 1000
+        && data.lastSentiment in ['positive', 'neutral', 'negative', 'distressed', 'crisis']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChatMessage(data, sessionId) {
+      return data.keys().hasAll(['userId', 'sessionId', 'role', 'content', 'sentiment', 'emotion', 'cbtTechnique', 'cbtGoal', 'detectedDistortion', 'crisisDetected', 'responseTimeMs', 'createdAt'])
+        && data.keys().hasOnly(['userId', 'sessionId', 'role', 'content', 'sentiment', 'emotion', 'cbtTechnique', 'cbtGoal', 'detectedDistortion', 'crisisDetected', 'responseTimeMs', 'createdAt'])
+        && isValidId(data.userId)
+        && data.userId == request.auth.uid
+        && isValidId(data.sessionId)
+        && data.sessionId == sessionId
+        && data.role in ['user', 'assistant']
+        && data.content is string && data.content.size() >= 1 && data.content.size() <= 6000
+        && data.sentiment in ['positive', 'neutral', 'negative', 'distressed', 'crisis']
+        && data.emotion is string && data.emotion.size() <= 40
+        && data.cbtTechnique is string && data.cbtTechnique.size() <= 80
+        && data.cbtGoal is string && data.cbtGoal.size() <= 200
+        && data.detectedDistortion is string && data.detectedDistortion.size() <= 80
+        && data.crisisDetected is bool
+        && data.responseTimeMs is number && data.responseTimeMs >= 0 && data.responseTimeMs <= 120000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSentimentAnalysis(data) {
+      return data.keys().hasAll([
+          'userId',
+          'inputText',
+          'sentiment',
+          'valenceScore',
+          'confidence',
+          'primaryEmotion',
+          'detectedDistortion',
+          'keyPhrases',
+          'cbtInsight',
+          'suggestedAction',
+          'crisisDetected',
+          'responseTimeMs',
+          'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'userId',
+          'inputText',
+          'sentiment',
+          'valenceScore',
+          'confidence',
+          'primaryEmotion',
+          'detectedDistortion',
+          'keyPhrases',
+          'cbtInsight',
+          'suggestedAction',
+          'crisisDetected',
+          'responseTimeMs',
+          'createdAt'
+        ])
+        && isValidId(data.userId)
+        && data.userId == request.auth.uid
+        && data.inputText is string && data.inputText.size() >= 1 && data.inputText.size() <= 2000
+        && data.sentiment in ['positive', 'neutral', 'negative', 'distressed', 'crisis']
+        && data.valenceScore is number && data.valenceScore >= 0 && data.valenceScore <= 100
+        && data.confidence is number && data.confidence >= 0 && data.confidence <= 100
+        && data.primaryEmotion is string && data.primaryEmotion.size() >= 1 && data.primaryEmotion.size() <= 40
+        && data.detectedDistortion is string && data.detectedDistortion.size() <= 80
+        && data.keyPhrases is list && data.keyPhrases.size() <= 5
+        && (data.keyPhrases.size() == 0 || (data.keyPhrases[0] is string && data.keyPhrases[0].size() >= 1 && data.keyPhrases[0].size() <= 60))
+        && data.cbtInsight is string && data.cbtInsight.size() <= 500
+        && data.suggestedAction in ['thought_record', 'breathing', 'activity', 'chat', 'none']
+        && data.crisisDetected is bool
+        && data.responseTimeMs is number && data.responseTimeMs >= 0 && data.responseTimeMs <= 60000
+        && data.createdAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+      allow create: if isOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (!('consentAcceptedAt' in incoming()) || incoming().consentAcceptedAt == request.time);
+      allow update: if isOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'therapeuticGoal', 'updatedAt'])) ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['consentAccepted', 'consentAcceptedAt', 'updatedAt'])
+            && incoming().consentAccepted == true
+            && incoming().consentAcceptedAt == request.time)
+        );
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      match /private/{docId} {
+        allow get: if isOwner(userId) && docId == 'info';
+        allow list: if false;
+        allow create: if isOwner(userId)
+          && docId == 'info'
+          && isValidUserPrivateInfo(incoming())
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isOwner(userId)
+          && docId == 'info'
+          && isValidUserPrivateInfo(incoming())
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'updatedAt']);
+        allow delete: if isOwner(userId) && docId == 'info';
+      }
+    }
+
+    match /userSessions/{sessionDocId} {
+      allow get: if isVerified() && isValidId(sessionDocId) && existing().userId == request.auth.uid;
+      allow list: if isVerified() && existing().userId == request.auth.uid;
+      allow create: if isVerified()
+        && isValidId(sessionDocId)
+        && isValidLoginSession(incoming())
+        && incoming().createdAt == request.time
+        && incoming().lastActive == request.time;
+      allow update: if isVerified()
+        && isValidId(sessionDocId)
+        && existing().userId == request.auth.uid
+        && isValidLoginSession(incoming())
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().lastActive == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'lastActive']);
+      allow delete: if isVerified() && isValidId(sessionDocId) && existing().userId == request.auth.uid;
+    }
+
+    match /moods/{moodId} {
+      allow get: if isVerified() && isValidId(moodId) && existing().userId == request.auth.uid;
+      allow list: if isVerified() && existing().userId == request.auth.uid;
+      allow create: if isVerified()
+        && isValidId(moodId)
+        && isValidMoodEntry(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerified()
+        && isValidId(moodId)
+        && existing().userId == request.auth.uid
+        && isValidMoodEntry(incoming())
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['score', 'emotionLabel', 'note', 'triggers', 'timestamp', 'updatedAt']);
+      allow delete: if isVerified() && isValidId(moodId) && existing().userId == request.auth.uid;
+    }
+
+    match /activities/{activityId} {
+      allow get: if isVerified() && isValidId(activityId) && existing().userId == request.auth.uid;
+      allow list: if isVerified() && existing().userId == request.auth.uid;
+      allow create: if isVerified()
+        && isValidId(activityId)
+        && isValidActivityEntry(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerified()
+        && isValidId(activityId)
+        && existing().userId == request.auth.uid
+        && isValidActivityEntry(incoming())
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'updatedAt'])) ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['type', 'name', 'description', 'duration', 'completed', 'timestamp', 'updatedAt']))
+        );
+      allow delete: if isVerified() && isValidId(activityId) && existing().userId == request.auth.uid;
+    }
+
+    match /thoughtRecords/{recordId} {
+      allow get: if isVerified() && isValidId(recordId) && existing().userId == request.auth.uid;
+      allow list: if isVerified() && existing().userId == request.auth.uid;
+      allow create: if isVerified()
+        && isValidId(recordId)
+        && isValidThoughtRecord(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerified()
+        && isValidId(recordId)
+        && existing().userId == request.auth.uid
+        && isValidThoughtRecord(incoming())
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'situation',
+          'automaticThought',
+          'distortion',
+          'emotionIntensityBefore',
+          'evidenceFor',
+          'evidenceAgainst',
+          'balancedThought',
+          'emotionIntensityAfter',
+          'updatedAt'
+        ]);
+      allow delete: if isVerified() && isValidId(recordId) && existing().userId == request.auth.uid;
+    }
+
+    match /chatSessions/{sessionId} {
+      allow get: if isVerified() && isValidId(sessionId) && existing().userId == request.auth.uid;
+      allow list: if isVerified() && existing().userId == request.auth.uid;
+      allow create: if isVerified()
+        && isValidId(sessionId)
+        && isValidChatSession(incoming())
+        && incoming().status == 'active'
+        && incoming().messageCount == 0
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerified()
+        && isValidId(sessionId)
+        && existing().userId == request.auth.uid
+        && existing().status != 'archived'
+        && isValidChatSession(incoming())
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (incoming().diff(existing()).affectedKeys().hasOnly(['title', 'updatedAt'])) ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['primaryTechnique', 'currentGoal', 'messageCount', 'lastSentiment', 'updatedAt'])
+            && incoming().messageCount >= existing().messageCount) ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+            && incoming().status in ['completed', 'archived'])
+        );
+      allow delete: if isVerified() && isValidId(sessionId) && existing().userId == request.auth.uid;
+
+      match /messages/{messageId} {
+        allow get: if isVerified()
+          && isValidId(sessionId)
+          && isValidId(messageId)
+          && existing().userId == request.auth.uid
+          && exists(/databases/$(database)/documents/chatSessions/$(sessionId))
+          && get(/databases/$(database)/documents/chatSessions/$(sessionId)).data.userId == request.auth.uid;
+        allow list: if isVerified()
+          && isValidId(sessionId)
+          && existing().userId == request.auth.uid;
+        allow create: if isVerified()
+          && isValidId(sessionId)
+          && isValidId(messageId)
+          && isValidChatMessage(incoming(), sessionId)
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/chatSessions/$(sessionId))
+          && get(/databases/$(database)/documents/chatSessions/$(sessionId)).data.userId == request.auth.uid
+          && get(/databases/$(database)/documents/chatSessions/$(sessionId)).data.status == 'active';
+        allow update: if false;
+        allow delete: if isVerified()
+          && isValidId(sessionId)
+          && isValidId(messageId)
+          && existing().userId == request.auth.uid;
+      }
+    }
+
+    match /sentimentAnalyses/{analysisId} {
+      allow get: if isVerified() && isValidId(analysisId) && existing().userId == request.auth.uid;
+      allow list: if isVerified() && existing().userId == request.auth.uid;
+      allow create: if isVerified()
+        && isValidId(analysisId)
+        && isValidSentimentAnalysis(incoming())
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isVerified() && isValidId(analysisId) && existing().userId == request.auth.uid;
+    }
+  }
+}
